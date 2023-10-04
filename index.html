@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pose Soccer Game</title>
+    <style>
+        /* 카메라 화면과 게임 화면을 나란히 배치하는 스타일 */
+        .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 80%;
+            height: 500px;
+        }
+
+        .camera-container {
+            width: 45%;
+            height: 100%;
+            border: 1px solid #ccc;
+            overflow: hidden;
+        }
+
+        .game-container {
+            width: 45%;
+            height: 100%;
+            background-image: url('soccer1.jpg'); /* 축구장 배경 이미지 */
+            background-size: cover;
+            position: relative;
+        }
+
+        #goalkeeper {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 80px;
+            background-color: rgb(15, 10, 10); /* 골마운의 색상 */
+            border-radius: 50%;
+            /* 골키퍼 이미지 설정 */
+            background-image: url('goalkeeper.jpg');
+            background-size: cover;
+            background-repeat: no-repeat;
+        }
+
+        #score {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: black;
+            font-size: 18px;
+        }
+
+        #ball {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            /* 공 이미지 설정 */
+            background-image: url('ball.jpg');
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-color: black; /* 공의 색상 */
+            border-radius: 50%;
+            left: 50%; /* 게임 화면 가운데 배치 */
+            top: 0; /* 상단에서 시작하도록 설정 */
+            transform: translateX(-50%);
+        }
+    </style>
+</head>
+<body>
+    <div>Pose Soccer Game</div>
+    <button type="button" onclick="init()">Start</button>
+    
+    <!-- 카메라 화면 컨테이너 -->
+    <div class="container">
+        <div class="camera-container">
+            <div><canvas id="canvas"></canvas></div>
+        </div>
+        
+        <!-- 게임 화면 컨테이너 -->
+        <div class="game-container">
+            <canvas id="game-canvas"></canvas>
+            <div id="goalkeeper"></div>
+            <div id="score">Score: 0</div>
+            <!-- 공을 게임 화면 위에 배치 -->
+            <div id="ball"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
+    <script type="text/javascript">
+        const URL = "https://teachablemachine.withgoogle.com/models/LDCMQ_e3Z/";
+        let model, webcam, ctx, goalKeeper, maxPredictions, score;
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmPose.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const size = 500; // 게임 컨테이너 크기에 맞게 조절
+            const flip = true;
+            webcam = new tmPose.Webcam(size, size, flip);
+            await webcam.setup();
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            const canvas = document.getElementById("canvas");
+            canvas.width = size;
+            canvas.height = size;
+            ctx = canvas.getContext("2d");
+            goalKeeper = document.getElementById("goalkeeper");
+            score = 0;
+            updateScore();
+        }
+
+        async function loop(timestamp) {
+            webcam.update();
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            const prediction = await model.predict(posenetOutput);
+
+            // 게임 로직 추가: 왼손, 오른손, 중립 포즈에 따라 골마운을 이동시키고 골막기
+            handleGameLogic(prediction);
+            drawPose(pose);
+        }
+
+        function handleGameLogic(prediction) {
+            const leftHandConfidence = prediction[0].probability;
+            const rightHandConfidence = prediction[1].probability;
+            const neutralConfidence = prediction[2].probability;
+
+            // 왼손 포즈에 따라 골마운을 왼쪽으로 이동
+            if (leftHandConfidence > 0.8) {
+                moveGoalKeeper("left");
+            }
+
+            // 오른손 포즈에 따라 골마운을 오른쪽으로 이동
+            if (rightHandConfidence > 0.8) {
+                moveGoalKeeper("right");
+            }
+
+            // 중립 포즈에 따라 공을 차는 동작
+            if (neutralConfidence > 0.8) {
+                kickBall();
+            }
+        }
+
+        function moveGoalKeeper(direction) {
+            const goalKeeperSpeed = 10; // 골마운 이동 속도
+
+            if (direction === "left") {
+                let newGoalKeeperX = goalKeeper.offsetLeft - goalKeeperSpeed;
+                if (newGoalKeeperX < 0) {
+                    newGoalKeeperX = 0;
+                }
+                goalKeeper.style.left = newGoalKeeperX + "px";
+            } else if (direction === "right") {
+                let newGoalKeeperX = goalKeeper.offsetLeft + goalKeeperSpeed;
+                if (newGoalKeeperX + goalKeeper.offsetWidth > 500) {
+                    newGoalKeeperX = 500 - goalKeeper.offsetWidth;
+                }
+                goalKeeper.style.left = newGoalKeeperX + "px";
+            }
+        }
+
+        // 공의 초기 위치 및 상태 설정
+        let ballX = 250; // 가로 위치
+        let ballY = 0;   // 세로 위치
+        let ballSpeedY = 2; // 공의 세로 이동 속도
+        let ballSpeedX = (Math.random() * 2 - 1) * 2; // 좌우 랜덤 이동 속도
+
+        function kickBall() {
+            if (ballY === 0) {
+                // 공의 가로 이동 방향을 랜덤하게 설정
+                ballSpeedX = Math.random() > 0.5 ? 2 : -2;
+            }
+        }
+
+        // 게임 루프
+        function gameLoop() {
+            if (ballY < 450) {
+                // 공이 게임 화면 위에 있는 동안만 이동
+                ballY += ballSpeedY;
+                ballX += ballSpeedX;
+                
+                // 공이 아래로 이동
+                ballY += ballSpeedY;
+
+                // 공을 화면 아래로 넘어갔을 때 초기화
+                if (ballY > 450) {
+                    ballX = Math.random() * 500; // 공을 랜덤한 가로 위치로 이동
+                    ballY = 0; // 공을 화면 상단으로 이동
+                    ballSpeedX = (Math.random() * 2 - 1) * 2; // 좌우 랜덤 이동 속도 재설정
+                }
+            }
+
+            // 공의 위치 업데이트
+            document.getElementById('ball').style.left = ballX + 'px';
+            document.getElementById('ball').style.top = ballY + 'px';
+
+            // 게임 루프 재호출
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 충돌 감지 함수
+        function isColliding(rect1X, rect1Y, rect1Width, rect1Height, rect2X, rect2Y, rect2Width, rect2Height) {
+            return rect1X < rect2X + rect2Width &&
+                rect1X + rect1Width > rect2X &&
+                rect1Y < rect2Y + rect2Height &&
+                rect1Y + rect1Height > rect2Y;
+        }
+
+        // 스코어 업데이트
+        function updateScore() {
+            document.getElementById("score").innerHTML = "Score: " + score;
+        }
+
+        // 게임 루프 시작
+        gameLoop();
+
+        function updateScore() {
+            document.getElementById("score").innerHTML = "Score: " + score;
+        }
+
+        function drawPose(pose) {
+            if (webcam.canvas) {
+                ctx.drawImage(webcam.canvas, 0, 0);
+                if (pose) {
+                    const minPartConfidence = 0.5;
+                    tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+                    tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
